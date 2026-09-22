@@ -53,6 +53,32 @@ uint8_t powerBatteryPercent(uint32_t now_utc) {
   return g_state.battery_percent;
 }
 
+ChargerEdge powerCheckCharger() {
+  uint16_t mv = readBatteryMillivolts();
+  uint16_t last = g_state.last_vbat_mv;
+  g_state.last_vbat_mv = mv;
+
+  // Nothing to compare against on a cold boot. Assume unplugged: guessing
+  // wrong here only costs one missed sync, whereas assuming plugged would
+  // fire a spurious unplug event on the next wake.
+  if (last == 0) return CHARGER_NO_CHANGE;
+
+  // Measured step is ~45 mV against ~4 mV of sample-to-sample jitter, so this
+  // sits well clear of noise. Natural discharge moves far slower than this
+  // per wake, so ordinary drain cannot look like an unplug.
+  constexpr uint16_t kEdgeMv = 25;
+
+  if (!g_state.charger_present && mv > last + kEdgeMv) {
+    g_state.charger_present = true;
+    return CHARGER_PLUGGED;
+  }
+  if (g_state.charger_present && last > mv + kEdgeMv) {
+    g_state.charger_present = false;
+    return CHARGER_UNPLUGGED;
+  }
+  return CHARGER_NO_CHANGE;
+}
+
 void powerVibratePulse() {
   pinMode(PIN_VIBRATE, OUTPUT);
   digitalWrite(PIN_VIBRATE, HIGH);

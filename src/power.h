@@ -14,5 +14,16 @@ uint8_t powerBatteryPercent(uint32_t now_utc);
 // Always samples. The shutdown decision must act on the present voltage.
 uint16_t powerBatteryMillivolts();
 
+enum ChargerEdge : uint8_t {
+  CHARGER_NO_CHANGE = 0,
+  CHARGER_PLUGGED,
+  CHARGER_UNPLUGGED,
+};
+
+// Samples the rail and reports a plug/unplug transition, updating the stored
+// reference. Call once per wake: it is edge-triggered, so an event that falls
+// entirely between two calls is missed rather than deferred.
+ChargerEdge powerCheckCharger();
+
 void powerVibratePulse();
 void powerVibrateOff();

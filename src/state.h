@@ -61,6 +61,16 @@ struct PersistedState {
   uint8_t battery_percent;
   uint32_t battery_sampled_at;
   bool battery_shutdown;
+
+  // Charger detection. This board routes VBUS nowhere the MCU can read -- a
+  // sweep of every RTC-capable GPIO found none that differ plugged vs
+  // unplugged -- so the only signal left is the battery rail, which sits
+  // ~45 mV higher while a charger holds it up. That offset is not a fixed
+  // voltage (a resting cell and a charging one can read the same absolute
+  // value at different charge levels), so detection compares consecutive
+  // samples and looks for the step rather than a threshold.
+  uint16_t last_vbat_mv;
+  bool charger_present;
 };
 
 #define STATE_MAGIC 0x46574832u

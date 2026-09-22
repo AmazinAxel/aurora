@@ -176,25 +176,62 @@ uint32_t hashContent(const WatchfaceContent &c) {
 // Everything but the clock shares one strip down the left edge, leaving the
 // rest for the digits.
 constexpr int16_t kMargin = 3;
-constexpr int16_t kLeftColumn = 28;
-constexpr int16_t kStripCentre = 13;
+
+// The strip takes 30 px rather than 23, which is what the clock can spare:
+// the widest two-digit pair at 70pt Black is 160 px and the clock band runs
+// kLeftColumn..197, so 35 leaves 162 -- one spare pixel each side of a "44".
+//
+// The extra width goes to the weekday, which is rotated -- its cap height
+// becomes its width, so it is the only strip element whose legibility is
+// bounded by strip width rather than by panel height. The date and battery
+// digits stay at 13pt: enlarging them needs vertical room the strip does not
+// have, since four stacked blocks already fill 200 px.
+constexpr int16_t kLeftColumn = 35;
+constexpr int16_t kStripCentre = 15;
 
 constexpr int16_t kBigHour = 97;
 constexpr int16_t kBigMinute = 197;
 
-constexpr int16_t kSmallHour = 66;
-constexpr int16_t kSmallMinute = 131;
-constexpr int16_t kSmallBottom = 196;
+// Three-row clock. 46pt digits are 66 px tall, so three rows plus gaps is
+// almost exactly the panel: the hour's ink starts at y=0 and the bottom row's
+// ends at 199. That leaves 4 px between hour and minute and 6 before the
+// pomodoro row, which is all the separation available without dropping to a
+// smaller face.
+constexpr int16_t kSmallHour = 63;
+constexpr int16_t kSmallMinute = 133;
+constexpr int16_t kSmallBottom = 199;
 
 // Strip runs top to bottom as date, weekday, then battery. The battery only
 // appears below BATTERY_VISIBLE_BELOW, so the bottom is usually blank --
 // which is why it gets the far end rather than the middle.
-constexpr int16_t kDigitPitch = 19;
-constexpr int16_t kStripTop = 16;
-constexpr int16_t kDateGap = 10;
-constexpr int16_t kWeekdayTop = 96;
-constexpr int16_t kBatteryRule = 152;
-constexpr int16_t kBatteryTop = 172;
+// The strip's four blocks -- month, day, weekday, battery -- are spaced on
+// their ink, not their baselines, so the gaps look equal rather than merely
+// measuring equal. UI digits are 18 px tall with yOffset -17, so a two-digit
+// block spans 39 px and its ink starts 17 px above the first baseline; the
+// rotated weekday is 21 px long.
+//
+// The weekday's slot is sized on its drawn length, not the font's yAdvance:
+// rotated, the word runs along the strip, so "WED" occupies 31 px where
+// yAdvance is only 21. Sizing it at 21 let the longest days overlap the day
+// digits by a pixel.
+//
+// At 11pt the weekday is 40 px long ("WED", the worst case) against 31 at
+// 9pt, so the gaps tighten from 12 to 9 to pay for it.
+//
+// Budget: 200 px panel = 8 top + 39 + 9 + 39 + 9 + 40 + 9 + 39 + 8 bottom.
+constexpr int16_t kDigitPitch = 21;
+constexpr int16_t kBlockGap = 9;
+
+// Baselines, each 17 px below its block's ink top.
+constexpr int16_t kStripTop = 25;      // month ink 8..47
+// Added to the baseline drawDigitColumn returns (one pitch past the last
+// digit, 67), not to the last baseline.
+constexpr int16_t kDateGap = 6;        // day ink 56..95
+constexpr int16_t kWeekdayTop = 124;   // weekday centre; ink 104..144
+constexpr int16_t kBatteryTop = 170;   // battery ink 153..192
+
+// Centred in the weekday-to-battery gap: 144 + 9/2.
+constexpr int16_t kBatteryRule = 148;
 
 // Stacked digits, one per row. Centred on each glyph's advance rather than
 // its ink box: a '1' is 6 px of ink whose stem sits hard right, so centring
@@ -229,9 +266,21 @@ void drawRotated(const char *text, int16_t left, int16_t centre_y,
   display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
 
   display.setRotation(3);
-  display.setCursor((int16_t)(display.height() - centre_y - w / 2 - x1),
-                    (int16_t)(left - y1));
+  int16_t x = (int16_t)(display.height() - centre_y - w / 2 - x1);
+  int16_t y = (int16_t)(left - y1);
+
+  // Drawn twice, one pixel apart, to thicken the stems. The family's Bold cut
+  // would be better, but the weekday is the only text in the strip competing
+  // with the clock for attention and a 1-bit panel has no lighter way to add
+  // weight. One pixel on a 12 px cap height reads as roughly one step up.
+  // Offset on y, not x: under rotation 3 the x axis runs along the text's
+  // baseline, so shifting it would smear the glyphs lengthwise instead of
+  // thickening their stems.
+  display.setCursor(x, y);
   display.print(text);
+  display.setCursor(x, (int16_t)(y + 1));
+  display.print(text);
+
   display.setRotation(0);
 }
 
@@ -263,8 +312,12 @@ void drawWatchfaceContent(const WatchfaceContent &c) {
 
   // Drawn after every upright item: it flips the global rotation, and doing
   // that mid-sequence makes the following draws depend on it being restored.
-  drawRotated(c.weekday, (int16_t)(kStripCentre - 7),
-              (int16_t)(kWeekdayTop + 16), FONT_WEEKDAY);
+  // kWeekdayTop is the centre of the block, which is what drawRotated wants:
+  // the word's length varies with the day, so centring keeps it in its slot
+  // regardless.
+  // Left edge, not baseline: half the 17 px glyph width left of centre.
+  drawRotated(c.weekday, (int16_t)(kStripCentre - 8), kWeekdayTop,
+              FONT_WEEKDAY);
 
   const int16_t clock_left = kLeftColumn;
   const int16_t clock_right = (int16_t)(display.width() - kMargin);

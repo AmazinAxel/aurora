@@ -165,10 +165,8 @@ void handleButton(Button button, uint32_t now_utc) {
       break;
 
     case BTN_TOP_RIGHT:
-      if (held) {
-        doNtpSync(now_utc);
-        return;
-      }
+      // No hold action: NTP syncs automatically when the charger is unplugged.
+      (void)held;
       pomodoroCyclePreset(1);
       g_state.preset_shown_until = now_utc + PRESET_VISIBLE_SECONDS;
       break;
@@ -197,7 +195,10 @@ uint32_t nextWakeDelay(uint32_t now_utc) {
   // bring it back. The timer still resumes correctly because the phase end is
   // an absolute instant.
   if (g_state.screen == SCREEN_COVER) {
-    return kMaxSleepSec;
+    // Unless the charger put it there: unplug detection is edge-triggered on
+    // consecutive samples, so sleeping an hour would mean noticing the unplug
+    // an hour late. These wakes are charger-powered, so they are free.
+    return g_state.charger_present ? 60 : kMaxSleepSec;
   }
 
   // A dead RTC reads as 0, which would land every wake on the same boundary.
@@ -256,6 +257,25 @@ void setup() {
                  now_utc);
     now_utc = timeNowUtc();  // an NTP sync may have moved the timebase
   } else {
+    // Only on timer wakes: a button wake is a user action, and the rail reads
+    // high there anyway from whatever the press just did.
+    switch (powerCheckCharger()) {
+      case CHARGER_PLUGGED:
+        // Parked on the charger, so the panel holds one image for hours --
+        // same reasoning as the manual cover entry.
+        enterCover();
+        break;
+      case CHARGER_UNPLUGGED:
+        // Coming off the charger is the one moment the watch is guaranteed to
+        // be in hand and near known WiFi, so it is the cheapest possible time
+        // to correct drift. Also restores the watchface.
+        doNtpSync(now_utc);
+        now_utc = timeNowUtc();
+        break;
+      case CHARGER_NO_CHANGE:
+        break;
+    }
+
     pomodoroTick(now_utc);
     if (g_state.screen != SCREEN_COVER) {
       requestDraw(cold_boot);
