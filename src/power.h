@@ -11,7 +11,7 @@ void powerSetFullClock();
 // Rate-limited: the reading is noisy and barely moves minute to minute.
 uint8_t powerBatteryPercent(uint32_t now_utc);
 
-// Always samples. The shutdown decision must act on the present voltage.
+// Sampled once per wake and cached; every caller sees the same reading.
 uint16_t powerBatteryMillivolts();
 
 enum ChargerEdge : uint8_t {
@@ -25,5 +25,7 @@ enum ChargerEdge : uint8_t {
 // entirely between two calls is missed rather than deferred.
 ChargerEdge powerCheckCharger();
 
-void powerVibratePulse();
+// The motor runs while the panel refreshes, so a buzzing wake is not extended
+// by the pulse; main times it against ALERT_PULSE_ON_MS.
+void powerVibrateOn();
 void powerVibrateOff();

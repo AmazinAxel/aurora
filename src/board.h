@@ -1,11 +1,9 @@
 #pragma once
 
-#include <stdint.h>
-
-// Physical facts about this board, confirmed with probe/probe.cpp. Tunable
-// preferences live in AuroraSettings.h instead.
+// Physical facts about this board, established with throwaway probe sketches
+// (since removed). Tunable preferences live in AuroraSettings.h instead.
 //
-// Probe findings: I2C 0x18 accelerometer (unused), 0x51 PCF8563 RTC.
+// Findings: I2C 0x18 accelerometer (unused), 0x51 PCF8563 RTC.
 // GPIO 33 oscillates at ~30 Hz -- it is the 32.768 kHz RTC crystal line, not
 // a button, and must stay out of the wake mask. GPIO 13 drives the vibration
 // motor; configuring it as an input runs the motor.

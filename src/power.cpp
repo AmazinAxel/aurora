@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 
-#include "../AuroraSettings.h"
 #include "board.h"
 #include "state.h"
 
@@ -14,7 +13,16 @@ constexpr uint16_t kBatteryMinMv = 3300;
 constexpr uint16_t kBatteryMaxMv = 4200;
 constexpr uint32_t kSampleIntervalMin = 15;
 
+// One reading per wake, shared by the shutdown check, charger detection and
+// the displayed percentage. Plain static RAM, so deep sleep clears it and the
+// next wake samples afresh.
+uint16_t g_wake_mv = 0;
+
 uint16_t readBatteryMillivolts() {
+  if (g_wake_mv != 0) {
+    return g_wake_mv;
+  }
+
   analogSetPinAttenuation(PIN_BATTERY_ADC, ADC_11db);
 
   // A single ESP32 ADC reading is noisy enough to swing the reported
@@ -24,7 +32,8 @@ uint16_t readBatteryMillivolts() {
   for (int i = 0; i < kSamples; i++) {
     total += analogReadMilliVolts(PIN_BATTERY_ADC);
   }
-  return (uint16_t)((total / kSamples) * kDividerRatio);
+  g_wake_mv = (uint16_t)((total / kSamples) * kDividerRatio);
+  return g_wake_mv;
 }
 
 uint8_t millivoltsToPercent(uint16_t mv) {
@@ -79,11 +88,9 @@ ChargerEdge powerCheckCharger() {
   return CHARGER_NO_CHANGE;
 }
 
-void powerVibratePulse() {
+void powerVibrateOn() {
   pinMode(PIN_VIBRATE, OUTPUT);
   digitalWrite(PIN_VIBRATE, HIGH);
-  delay(ALERT_PULSE_ON_MS);
-  digitalWrite(PIN_VIBRATE, LOW);
 }
 
 void powerVibrateOff() {

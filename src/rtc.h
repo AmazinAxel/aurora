@@ -16,11 +16,14 @@ struct RtcTime {
   uint8_t second;
 };
 
-bool rtcBegin();
+// cold_boot: first wake after power-up or a flash, when one-off chip setup
+// runs.
+void rtcBegin(bool cold_boot);
 void rtcEnd();
 
-// True if the chip reports its oscillator stopped, meaning the stored time is
-// not trustworthy and needs an NTP sync.
+// As of the last time read: true if the chip reported its oscillator stopped,
+// or could not be read at all. Either way the stored time is not trustworthy
+// and needs an NTP sync.
 bool rtcClockIntegrityLost();
 
 bool rtcReadEpoch(uint32_t &epoch);

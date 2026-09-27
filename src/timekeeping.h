@@ -8,13 +8,13 @@
 // applied on the way to the display only, so the stored timebase stays
 // comparable with NTP.
 
+// Reads the chip, so call once per wake and pass the result around. 0 if the
+// chip could not be read.
 uint32_t timeNowUtc();
 
-// The chip's own uncorrected reading, which is what the drift model measures.
-uint32_t timeRawRtc();
-
-uint32_t timeNowDisplay();
-void timeNowDisplayParts(RtcTime &out);
+// Local calendar fields for a UTC instant. Every display offset is a whole
+// number of minutes, so local minute boundaries fall on UTC ones.
+void timeDisplayParts(uint32_t utc, RtcTime &out);
 
 // Set the RTC from a fresh NTP reading and, if there is a usable previous
 // sync, update the learned drift from the error accumulated over the interval.

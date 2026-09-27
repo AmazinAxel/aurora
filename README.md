@@ -4,11 +4,11 @@ A Pomodoro e-ink timer for your wrist!
 
 Featuring a very readable watchface with literally zero other UIs or menus. The entire firmware acts on a single display with only a sleep screen.
 
-Hold the top right or bottom right buttons to run an NTP sync or change from daylight savings mode. If you press them, it will cycle through the Pomodoro modes!
+Press the top right or bottom right buttons to cycle through the Pomodoro presets: while you're choosing, the clock shows the focus minutes on top and the break minutes below. Hold the bottom right button to toggle daylight savings.
 
-Use the bottom left button to pause/start or reset the timer. It will vibrate whenever its time to take a break or start working!
+Use the bottom left button to pause/start the timer, or hold it to restart. While a timer runs, a play/pause mark sits in the side strip and a bar down the right edge drains from full to empty as the phase goes by. It will vibrate whenever its time to take a break or start working!
 
-The sleep screen can save battery and appears when charging. The watch's RTC is always saved so you never lose the time! And if you do, its a simple NTP sync away.
+The sleep screen can save battery and appears when charging. The watch's RTC is always saved so you never lose the time! And if you do, it shows `--` until the next NTP sync, which runs automatically when you unplug the charger.
 
 Everything is as optimized as possible for battery life and quick display refreshes with as few full refreshes as possible!
 
@@ -33,7 +33,6 @@ Put this in a `AuroraSettings.h` file in the project root!
 #define MINUTES_AHEAD 2
 #define TZ_OFFSET_MINUTES (-480) // UTC-8 PST
 #define DST_OFFSET_MINUTES 60
-#define NTP_STATUS_VISIBLE_MINUTES 2
 #define PRESET_VISIBLE_SECONDS 6
 #define FULL_REFRESH_INTERVAL 180
 #define BATTERY_VISIBLE_BELOW 50
@@ -57,6 +56,7 @@ struct PomodoroPreset {
   uint16_t break_minutes;
 };
 
+// Shown as two digits each, so at most 99 minutes.
 static const PomodoroPreset POMODORO_PRESETS[] = {
     {25, 5},
     {30, 5},

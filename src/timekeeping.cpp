@@ -27,12 +27,13 @@ int32_t displayOffsetSeconds() {
   return offset + (int32_t)MINUTES_AHEAD * 60;
 }
 
-}  // namespace
-
+// The chip's own uncorrected reading, which is what the drift model measures.
 uint32_t timeRawRtc() {
   uint32_t raw = 0;
   return rtcReadEpoch(raw) ? raw : 0;
 }
+
+}  // namespace
 
 uint32_t timeNowUtc() {
   uint32_t raw = timeRawRtc();
@@ -46,12 +47,10 @@ uint32_t timeNowUtc() {
   return (uint32_t)((int32_t)raw + base + driftCorrection(raw));
 }
 
-uint32_t timeNowDisplay() {
-  uint32_t utc = timeNowUtc();
-  return utc == 0 ? 0 : (uint32_t)((int32_t)utc + displayOffsetSeconds());
+void timeDisplayParts(uint32_t utc, RtcTime &out) {
+  rtcFromEpoch(utc == 0 ? 0 : (uint32_t)((int32_t)utc + displayOffsetSeconds()),
+               out);
 }
-
-void timeNowDisplayParts(RtcTime &out) { rtcFromEpoch(timeNowDisplay(), out); }
 
 void timeApplyNtp(uint32_t true_utc) {
   // Measured before the chip is touched: this reading is what the crystal

@@ -12,15 +12,22 @@ const PomodoroPreset &preset() {
 
 void beginPhase(uint8_t phase, uint32_t now_utc, uint16_t minutes) {
   g_state.phase = phase;
+  g_state.paused = false;
   g_state.phase_end_utc = now_utc + (uint32_t)minutes * 60UL;
   g_state.paused_remaining = 0;
   g_state.alert_started_utc = 0;
+}
+
+bool running() {
+  return !g_state.paused &&
+         (g_state.phase == POMO_FOCUS || g_state.phase == POMO_BREAK);
 }
 
 }  // namespace
 
 void pomodoroStop() {
   g_state.phase = POMO_IDLE;
+  g_state.paused = false;
   g_state.phase_end_utc = 0;
   g_state.paused_remaining = 0;
   g_state.alert_started_utc = 0;
@@ -32,7 +39,7 @@ void pomodoroCyclePreset(int8_t direction) {
   g_state.preset_index = (uint8_t)((next % count + count) % count);
 
   // Whatever was running was measured against the old durations, so carrying
-  // it over would show a countdown that contradicts the preset beside it.
+  // it over would drain the bar against the wrong total.
   pomodoroStop();
 }
 
@@ -40,35 +47,22 @@ void pomodoroStart(uint32_t now_utc) {
   beginPhase(POMO_FOCUS, now_utc, preset().focus_minutes);
 }
 
-void pomodoroReset(uint32_t now_utc) { pomodoroStart(now_utc); }
-
 void pomodoroTogglePause(uint32_t now_utc) {
-  switch (g_state.phase) {
-    case POMO_IDLE:
-      pomodoroStart(now_utc);
-      break;
-
-    case POMO_FOCUS:
-    case POMO_BREAK:
-      // Stored as a span, not a timestamp, so resuming rebuilds the end
-      // instant and the countdown keeps its second-offset.
-      g_state.paused_remaining = g_state.phase_end_utc > now_utc
-                                     ? g_state.phase_end_utc - now_utc
-                                     : 0;
-      g_state.paused_from_phase = g_state.phase;
-      g_state.phase = POMO_PAUSED;
-      break;
-
-    case POMO_PAUSED:
-      g_state.phase =
-          g_state.paused_from_phase == POMO_BREAK ? POMO_BREAK : POMO_FOCUS;
-      g_state.phase_end_utc = now_utc + g_state.paused_remaining;
-      g_state.paused_remaining = 0;
-      break;
-
-    default:
-      pomodoroAcknowledge(now_utc);
-      break;
+  if (g_state.phase == POMO_IDLE) {
+    pomodoroStart(now_utc);
+  } else if (pomodoroAlerting()) {
+    pomodoroAcknowledge(now_utc);
+  } else if (g_state.paused) {
+    // Stored as a span, not a timestamp, so resuming rebuilds the end instant
+    // and the phase still runs its full remaining span.
+    g_state.phase_end_utc = now_utc + g_state.paused_remaining;
+    g_state.paused_remaining = 0;
+    g_state.paused = false;
+  } else {
+    g_state.paused_remaining = g_state.phase_end_utc > now_utc
+                                   ? g_state.phase_end_utc - now_utc
+                                   : 0;
+    g_state.paused = true;
   }
 }
 
@@ -80,16 +74,14 @@ void pomodoroAcknowledge(uint32_t now_utc) {
   }
 }
 
-bool pomodoroTick(uint32_t now_utc) {
-  if ((g_state.phase != POMO_FOCUS && g_state.phase != POMO_BREAK) ||
-      now_utc < g_state.phase_end_utc) {
-    return false;
+void pomodoroTick(uint32_t now_utc) {
+  if (!running() || now_utc < g_state.phase_end_utc) {
+    return;
   }
 
   g_state.phase = g_state.phase == POMO_FOCUS ? POMO_ALERT_FOCUS_DONE
                                               : POMO_ALERT_BREAK_DONE;
   g_state.alert_started_utc = now_utc;
-  return true;
 }
 
 bool pomodoroAlerting() {
@@ -98,13 +90,16 @@ bool pomodoroAlerting() {
 }
 
 bool pomodoroActive() { return g_state.phase != POMO_IDLE; }
-
-bool pomodoroRunning() {
-  return g_state.phase == POMO_FOCUS || g_state.phase == POMO_BREAK;
-}
+bool pomodoroPaused() { return g_state.paused; }
 
 uint16_t pomodoroFocusMinutes() { return preset().focus_minutes; }
 uint16_t pomodoroBreakMinutes() { return preset().break_minutes; }
+
+uint32_t pomodoroPhaseSeconds() {
+  return (uint32_t)(g_state.phase == POMO_BREAK ? preset().break_minutes
+                                                : preset().focus_minutes) *
+         60UL;
+}
 
 bool pomodoroShouldBuzz(uint32_t now_utc) {
   if (!pomodoroAlerting() || g_state.alert_started_utc == 0) {
@@ -113,30 +108,25 @@ bool pomodoroShouldBuzz(uint32_t now_utc) {
   return (now_utc - g_state.alert_started_utc) < ALERT_MAX_DURATION_SEC;
 }
 
-uint16_t pomodoroRemainingMinutes(uint32_t now_utc) {
-  uint32_t remaining;
-  if (g_state.phase == POMO_PAUSED) {
-    remaining = g_state.paused_remaining;
-  } else if (pomodoroRunning()) {
-    remaining =
-        g_state.phase_end_utc > now_utc ? g_state.phase_end_utc - now_utc : 0;
-  } else {
-    return 0;
+uint32_t pomodoroRemainingSeconds(uint32_t now_utc) {
+  if (g_state.paused) {
+    return g_state.paused_remaining;
   }
-  return (uint16_t)((remaining + 59) / 60);
+  if (running() && g_state.phase_end_utc > now_utc) {
+    return g_state.phase_end_utc - now_utc;
+  }
+  return 0;
 }
 
 uint32_t pomodoroNextWakeUtc(uint32_t now_utc) {
-  if (pomodoroRunning()) {
-    if (g_state.phase_end_utc <= now_utc) {
-      return now_utc;
-    }
-    // Ticks land on the start's second-offset, not the wall-clock minute.
-    uint32_t to_next = (g_state.phase_end_utc - now_utc) % 60;
-    return now_utc + (to_next == 0 ? 60 : to_next);
+  // Only the phase end itself. The bar needs no wakes of its own: it is
+  // redrawn on the clock's minute tick, which halves wakes and panel
+  // refreshes against stepping it on the phase's second-offset too.
+  if (running()) {
+    return g_state.phase_end_utc > now_utc ? g_state.phase_end_utc : now_utc;
   }
 
-  if (pomodoroAlerting() && pomodoroShouldBuzz(now_utc)) {
+  if (pomodoroShouldBuzz(now_utc)) {
     // One wake per buzz. A full wake costs far more than the pulse itself, so
     // the gap is deliberately long rather than a tight motor duty cycle.
     return now_utc + ALERT_REPEAT_SEC;

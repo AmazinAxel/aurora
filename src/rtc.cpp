@@ -22,22 +22,16 @@ bool isLeapYear(uint16_t y) {
   return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
 }
 
-bool readRegister(uint8_t reg, uint8_t &value) {
-  Wire.beginTransmission(RTC_I2C_ADDR);
-  Wire.write(reg);
-  if (Wire.endTransmission() != 0 ||
-      Wire.requestFrom((int)RTC_I2C_ADDR, 1) != 1) {
-    return false;
-  }
-  value = Wire.read();
-  return true;
-}
+// Latched from the seconds register on every time read, so checking it costs
+// no bus transaction of its own. Starts set: an unread chip is not trusted.
+bool g_integrity_lost = true;
 
 bool rtcRead(RtcTime &out) {
   Wire.beginTransmission(RTC_I2C_ADDR);
   Wire.write(REG_SECONDS);
   if (Wire.endTransmission() != 0 ||
       Wire.requestFrom((int)RTC_I2C_ADDR, 7) != 7) {
+    g_integrity_lost = true;
     return false;
   }
 
@@ -46,6 +40,7 @@ bool rtcRead(RtcTime &out) {
     raw[i] = Wire.read();
   }
 
+  g_integrity_lost = (raw[0] & FLAG_VL) != 0;
   out.second = bcdToBin(raw[0] & 0x7F);
   out.minute = bcdToBin(raw[1] & 0x7F);
   out.hour = bcdToBin(raw[2] & 0x3F);
@@ -74,31 +69,24 @@ uint32_t rtcToEpoch(const RtcTime &t) {
 
 }  // namespace
 
-bool rtcBegin() {
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  Wire.beginTransmission(RTC_I2C_ADDR);
-  if (Wire.endTransmission() != 0) {
-    return false;
-  }
+void rtcBegin(bool cold_boot) {
+  // The PCF8563 is rated for fast mode; at 400 kHz the per-wake time read
+  // holds the bus a quarter as long.
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
 
-  // No alarm is ever armed, so make sure a stale one from older firmware
-  // cannot hold the interrupt line asserted.
-  Wire.beginTransmission(RTC_I2C_ADDR);
-  Wire.write(REG_CONTROL2);
-  Wire.write((uint8_t)0x00);
-  Wire.endTransmission();
-  return true;
+  // No alarm is ever armed. Clear any left by older firmware so it cannot
+  // hold the interrupt line asserted -- once per flash, not per wake.
+  if (cold_boot) {
+    Wire.beginTransmission(RTC_I2C_ADDR);
+    Wire.write(REG_CONTROL2);
+    Wire.write((uint8_t)0x00);
+    Wire.endTransmission();
+  }
 }
 
 void rtcEnd() { Wire.end(); }
 
-bool rtcClockIntegrityLost() {
-  uint8_t seconds = 0;
-  if (!readRegister(REG_SECONDS, seconds)) {
-    return true;
-  }
-  return (seconds & FLAG_VL) != 0;
-}
+bool rtcClockIntegrityLost() { return g_integrity_lost; }
 
 bool rtcReadEpoch(uint32_t &epoch) {
   RtcTime t;

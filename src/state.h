@@ -17,15 +17,8 @@ enum PomodoroPhase : uint8_t {
   POMO_IDLE = 0,
   POMO_FOCUS,
   POMO_BREAK,
-  POMO_PAUSED,
   POMO_ALERT_FOCUS_DONE,
   POMO_ALERT_BREAK_DONE,
-};
-
-enum NtpStatus : uint8_t {
-  NTP_NONE = 0,
-  NTP_OK,
-  NTP_FAILED,
 };
 
 struct PersistedState {
@@ -40,17 +33,17 @@ struct PersistedState {
   bool dst_active;
 
   // Pomodoro. phase_end_utc is an absolute instant, so the countdown stays
-  // locked to the second the phase started rather than the wall clock.
+  // locked to the second the phase started rather than the wall clock. A
+  // paused phase keeps its value; paused_remaining holds the span left.
   uint8_t preset_index;
   uint8_t phase;
+  bool paused;
   uint32_t phase_end_utc;
   uint32_t paused_remaining;
-  uint8_t paused_from_phase;
   uint32_t alert_started_utc;
 
   uint8_t screen;
-  uint8_t ntp_status;
-  uint32_t ntp_status_until;
+  // While in the future, the clock rows show the preset instead of the time.
   uint32_t preset_shown_until;
 
   // Partial refreshes since the last full one, and a hash of what the panel
@@ -73,7 +66,7 @@ struct PersistedState {
   bool charger_present;
 };
 
-#define STATE_MAGIC 0x46574832u
+#define STATE_MAGIC 0x46574833u
 
 extern RTC_DATA_ATTR PersistedState g_state;
 

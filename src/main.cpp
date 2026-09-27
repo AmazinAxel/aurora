@@ -35,45 +35,33 @@ constexpr uint32_t kBatteryShutdownCheckMin = 10;
 // EXT1 trigger would otherwise let the clock sit stale indefinitely.
 constexpr uint32_t kMaxSleepSec = 3600;
 
-bool g_needs_draw = false;
-bool g_needs_full = false;
+// Aim this far past each deadline. The sleep timer runs off the ESP32's RC
+// oscillator, not the RTC crystal, so a wake aimed exactly at a minute
+// boundary can land a fraction early -- see the old minute, draw nothing, and
+// need a second wake a second later. Arriving slightly late costs nothing.
+constexpr uint32_t kWakeSlackMs = 700;
 
-void requestDraw(bool full) {
-  g_needs_draw = true;
-  g_needs_full = g_needs_full || full;
-}
+// millis() at the last RTC read, so the sleep can subtract the time the wake
+// has spent since -- a long press or a slow refresh would otherwise push
+// every deadline late by that much.
+uint32_t g_now_read_ms = 0;
 
-// Partial even across a screen change: the panel handles a full-frame partial
-// fine, and FULL_REFRESH_INTERVAL is what bounds ghosting, so flashing on
-// every transition buys nothing and is the most power-hungry thing it does.
-void switchScreen(uint8_t screen) {
-  g_state.screen = screen;
-  requestDraw(false);
-}
-
-void doNtpSync(uint32_t now_utc) {
-  uint32_t true_utc = 0;
-  if (netSyncNtp(true_utc)) {
-    timeApplyNtp(true_utc);
-    g_state.ntp_status = NTP_OK;
-    now_utc = true_utc;
-  } else {
-    g_state.ntp_status = NTP_FAILED;
-  }
-
-  g_state.ntp_status_until =
-      now_utc + (uint32_t)NTP_STATUS_VISIBLE_MINUTES * 60;
-  switchScreen(SCREEN_WATCHFACE);
+uint32_t readNow() {
+  g_now_read_ms = millis();
+  return timeNowUtc();
 }
 
 void enterCover() {
   g_state.screen = SCREEN_COVER;
   displayCover();
-  g_needs_draw = false;
 }
 
 void sleepNow(uint32_t delay_sec) {
-  esp_sleep_enable_timer_wakeup((uint64_t)delay_sec * 1000000ULL);
+  uint32_t awake_ms = millis() - g_now_read_ms;
+  uint64_t target_ms = (uint64_t)delay_sec * 1000ULL + kWakeSlackMs;
+  uint64_t sleep_ms = target_ms > awake_ms + 1000ULL ? target_ms - awake_ms
+                                                      : 1000ULL;
+  esp_sleep_enable_timer_wakeup(sleep_ms * 1000ULL);
   esp_sleep_enable_ext1_wakeup(BUTTON_WAKE_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
 
   // Digital pulls are switched off in deep sleep, so the pins would float and
@@ -107,8 +95,7 @@ bool handleBatteryShutdown(uint32_t now_utc) {
     return false;
   } else {
     g_state.battery_shutdown = true;
-    g_state.screen = SCREEN_COVER;
-    displayCover();
+    enterCover();
   }
 
   // Buttons are deliberately not a wake source here: with the cell this low,
@@ -131,7 +118,7 @@ void handleButton(Button button, uint32_t now_utc) {
   // acting on a watch the user thinks is asleep.
   if (g_state.screen == SCREEN_COVER) {
     if (button == BTN_TOP_LEFT) {
-      switchScreen(SCREEN_WATCHFACE);
+      g_state.screen = SCREEN_WATCHFACE;
     }
     return;
   }
@@ -139,22 +126,11 @@ void handleButton(Button button, uint32_t now_utc) {
   // While buzzing, any press acknowledges and starts the next phase. That is
   // the whole interaction, so it pre-empts the normal mapping.
   if (pomodoroAlerting()) {
-    powerVibrateOff();
     pomodoroAcknowledge(now_utc);
-    switchScreen(SCREEN_WATCHFACE);
     return;
   }
 
   switch (button) {
-    case BTN_BOTTOM_LEFT:
-      if (held) {
-        pomodoroReset(now_utc);
-      } else {
-        pomodoroTogglePause(now_utc);
-      }
-      g_state.preset_shown_until = 0;
-      break;
-
     case BTN_TOP_LEFT:
       if (held) {
         enterCover();
@@ -164,9 +140,16 @@ void handleButton(Button button, uint32_t now_utc) {
       g_state.preset_shown_until = 0;
       break;
 
+    case BTN_BOTTOM_LEFT:
+      if (held) {
+        pomodoroStart(now_utc);
+      } else {
+        pomodoroTogglePause(now_utc);
+      }
+      g_state.preset_shown_until = 0;
+      break;
+
     case BTN_TOP_RIGHT:
-      // No hold action: NTP syncs automatically when the charger is unplugged.
-      (void)held;
       pomodoroCyclePreset(1);
       g_state.preset_shown_until = now_utc + PRESET_VISIBLE_SECONDS;
       break;
@@ -181,15 +164,42 @@ void handleButton(Button button, uint32_t now_utc) {
       break;
 
     default:
-      return;
+      break;
   }
-
-  switchScreen(SCREEN_WATCHFACE);
 }
 
-// The clock wants the next wall-clock minute; a running pomodoro wants its own
-// tick, deliberately offset from it; the preset and NTP rows expire on their
-// own deadlines. Whichever comes first wins.
+// Timer wakes only: a button wake is a user action, and the rail reads high
+// there anyway from whatever the press just did. Returns the current time,
+// which an NTP sync may have moved.
+uint32_t handleCharger(uint32_t now_utc) {
+  switch (powerCheckCharger()) {
+    case CHARGER_PLUGGED:
+      // Parked on the charger, so the panel holds one image for hours --
+      // same reasoning as the manual cover entry.
+      enterCover();
+      break;
+
+    case CHARGER_UNPLUGGED: {
+      // Coming off the charger is the one moment the watch is reliably in
+      // hand and near known WiFi, so it is the cheapest time to correct
+      // drift. The result is not displayed; a failure just means the next
+      // unplug tries again.
+      uint32_t true_utc = 0;
+      if (netSyncNtp(true_utc)) {
+        timeApplyNtp(true_utc);
+      }
+      g_state.screen = SCREEN_WATCHFACE;
+      return readNow();  // the sync can take seconds, success or not
+    }
+
+    case CHARGER_NO_CHANGE:
+      break;
+  }
+  return now_utc;
+}
+
+// The clock wants the next minute boundary; a running pomodoro wants its
+// phase end; a shown preset wants its expiry. Whichever comes first wins.
 uint32_t nextWakeDelay(uint32_t now_utc) {
   // On the cover nothing is drawn and nothing buzzes, so only a button should
   // bring it back. The timer still resumes correctly because the phase end is
@@ -201,27 +211,18 @@ uint32_t nextWakeDelay(uint32_t now_utc) {
     return g_state.charger_present ? 60 : kMaxSleepSec;
   }
 
-  // A dead RTC reads as 0, which would land every wake on the same boundary.
-  // Fall back to a plain minute so the watch keeps ticking regardless.
-  uint32_t display_now = timeNowDisplay();
-  uint32_t next =
-      now_utc + (display_now == 0 ? 60 : 60 - (display_now % 60));
+  // Display offsets are whole minutes, so the local minute turns over with
+  // the UTC one. A dead RTC reads as 0; a plain minute keeps it ticking.
+  uint32_t next = now_utc + (now_utc == 0 ? 60 : 60 - now_utc % 60);
 
-  uint32_t pomo = pomodoroNextWakeUtc(now_utc);
-  if (pomo > now_utc && pomo < next) {
-    next = pomo;
-  }
-
-  // Both rows shrink the clock while visible, so each needs a wake at its
-  // deadline or the layout would not revert until the next minute tick.
   for (uint32_t deadline :
-       {g_state.preset_shown_until, g_state.ntp_status_until}) {
-    if (deadline > now_utc && deadline != UINT32_MAX && deadline < next) {
+       {pomodoroNextWakeUtc(now_utc), g_state.preset_shown_until}) {
+    if (deadline > now_utc && deadline < next) {
       next = deadline;
     }
   }
 
-  uint32_t delay_sec = next > now_utc ? next - now_utc : 1;
+  uint32_t delay_sec = next - now_utc;
   return delay_sec > kMaxSleepSec ? kMaxSleepSec : delay_sec;
 }
 
@@ -235,16 +236,10 @@ void setup() {
   bool cold_boot = stateInitIfCold();
 
   buttonsBegin();
-  bool rtc_ok = rtcBegin();
+  rtcBegin(cold_boot);
 
-  // Without a valid RTC the clock would be plausible-looking nonsense, so say
-  // so instead and leave the message up until a sync succeeds.
-  if (!rtc_ok || rtcClockIntegrityLost()) {
-    g_state.ntp_status = NTP_FAILED;
-    g_state.ntp_status_until = UINT32_MAX;
-  }
-
-  uint32_t now_utc = timeNowUtc();
+  // The only RTC read on an ordinary wake; everything below reuses it.
+  uint32_t now_utc = readNow();
 
   // Before anything touches the panel: a brownout mid-update can leave the
   // e-ink partially driven.
@@ -253,42 +248,37 @@ void setup() {
   }
 
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+    // Tick first, so a press just after a phase ended acknowledges it rather
+    // than pausing a timer that has already run out.
+    pomodoroTick(now_utc);
     handleButton(buttonsFromWakeMask(esp_sleep_get_ext1_wakeup_status()),
                  now_utc);
-    now_utc = timeNowUtc();  // an NTP sync may have moved the timebase
   } else {
-    // Only on timer wakes: a button wake is a user action, and the rail reads
-    // high there anyway from whatever the press just did.
-    switch (powerCheckCharger()) {
-      case CHARGER_PLUGGED:
-        // Parked on the charger, so the panel holds one image for hours --
-        // same reasoning as the manual cover entry.
-        enterCover();
-        break;
-      case CHARGER_UNPLUGGED:
-        // Coming off the charger is the one moment the watch is guaranteed to
-        // be in hand and near known WiFi, so it is the cheapest possible time
-        // to correct drift. Also restores the watchface.
-        doNtpSync(now_utc);
-        now_utc = timeNowUtc();
-        break;
-      case CHARGER_NO_CHANGE:
-        break;
-    }
-
+    now_utc = handleCharger(now_utc);
     pomodoroTick(now_utc);
-    if (g_state.screen != SCREEN_COVER) {
-      requestDraw(cold_boot);
+  }
+
+  // The cover is an explicit "put it away" state: silent and undrawn.
+  if (g_state.screen != SCREEN_COVER) {
+    // The pulse overlaps the panel refresh rather than preceding it, so a
+    // buzzing wake is no longer than a drawing one.
+    bool buzz = pomodoroShouldBuzz(now_utc);
+    uint32_t buzz_start = millis();
+    if (buzz) {
+      powerVibrateOn();
     }
-  }
 
-  // The cover is an explicit "put it away" state, so it stays silent.
-  if (g_state.screen != SCREEN_COVER && pomodoroShouldBuzz(now_utc)) {
-    powerVibratePulse();
-  }
+    // Unconditional: the content hash inside turns an unchanged frame into a
+    // no-op, so there is no need to track here whether anything changed.
+    displayWatchface(now_utc, cold_boot);
 
-  if (g_needs_draw && g_state.screen != SCREEN_COVER) {
-    displayWatchface(now_utc, g_needs_full || cold_boot);
+    if (buzz) {
+      uint32_t elapsed = millis() - buzz_start;
+      if (elapsed < ALERT_PULSE_ON_MS) {
+        delay(ALERT_PULSE_ON_MS - elapsed);
+      }
+      powerVibrateOff();
+    }
   }
 
   // Wait for release, or sleeping would immediately re-trigger the ANY_HIGH
