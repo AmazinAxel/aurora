@@ -2,9 +2,9 @@
 
 #include <stdint.h>
 
-// Drop to 80 MHz for the normal wake path: most of it is spent waiting on the
-// panel's BUSY line, and core current scales with clock. Only WiFi wants the
-// full clock, so it finishes sooner and switches the radio off.
+// The wake path runs at 80 MHz (board_build.f_cpu): most of it is spent
+// waiting on the panel's BUSY line, and core current scales with clock. Only
+// WiFi wants the full clock, so it finishes sooner and switches the radio off.
 void powerSetLowClock();
 void powerSetFullClock();
 
@@ -29,3 +29,4 @@ ChargerEdge powerCheckCharger();
 // by the pulse; main times it against ALERT_PULSE_ON_MS.
 void powerVibrateOn();
 void powerVibrateOff();
+bool powerVibrating();

@@ -6,8 +6,7 @@
 namespace {
 
 const PomodoroPreset &preset() {
-  uint8_t idx = g_state.preset_index;
-  return POMODORO_PRESETS[idx < POMODORO_PRESET_COUNT ? idx : 0];
+  return POMODORO_PRESETS[g_state.preset_index];
 }
 
 void beginPhase(uint8_t phase, uint32_t now_utc, uint16_t minutes) {
@@ -50,8 +49,6 @@ void pomodoroStart(uint32_t now_utc) {
 void pomodoroTogglePause(uint32_t now_utc) {
   if (g_state.phase == POMO_IDLE) {
     pomodoroStart(now_utc);
-  } else if (pomodoroAlerting()) {
-    pomodoroAcknowledge(now_utc);
   } else if (g_state.paused) {
     // Stored as a span, not a timestamp, so resuming rebuilds the end instant
     // and the phase still runs its full remaining span.
@@ -102,10 +99,8 @@ uint32_t pomodoroPhaseSeconds() {
 }
 
 bool pomodoroShouldBuzz(uint32_t now_utc) {
-  if (!pomodoroAlerting() || g_state.alert_started_utc == 0) {
-    return pomodoroAlerting();
-  }
-  return (now_utc - g_state.alert_started_utc) < ALERT_MAX_DURATION_SEC;
+  return pomodoroAlerting() &&
+         now_utc - g_state.alert_started_utc < ALERT_MAX_DURATION_SEC;
 }
 
 uint32_t pomodoroRemainingSeconds(uint32_t now_utc) {
@@ -123,7 +118,7 @@ uint32_t pomodoroNextWakeUtc(uint32_t now_utc) {
   // redrawn on the clock's minute tick, which halves wakes and panel
   // refreshes against stepping it on the phase's second-offset too.
   if (running()) {
-    return g_state.phase_end_utc > now_utc ? g_state.phase_end_utc : now_utc;
+    return g_state.phase_end_utc;
   }
 
   if (pomodoroShouldBuzz(now_utc)) {

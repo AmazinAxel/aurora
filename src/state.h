@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-#include <string.h>
 
 // Persisted in RTC slow memory: survives deep sleep at no power cost, unlike
 // NVS which would wear flash on every minute tick. Does NOT survive power

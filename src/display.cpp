@@ -1,6 +1,7 @@
 #include "display.h"
 
 #include <GxEPD2_BW.h>
+#include <esp_sleep.h>
 
 #include "../AuroraSettings.h"
 #include "assets/cover.h"
@@ -23,6 +24,22 @@ const char *const kWeekdays[7] = {"SUN", "MON", "TUE", "WED",
 
 bool g_initialised = false;
 
+// A refresh is hundreds of milliseconds of the CPU polling BUSY. Light sleep
+// until the line drops instead, as the official Watchy firmware does. The
+// timer is a backstop so a panel that never releases BUSY still reaches
+// GxEPD2's timeout. Skipped while the motor runs: its pin is not guaranteed
+// to hold through light sleep, and the pulse overlaps the refresh.
+void busyLightSleep(const void *) {
+  if (powerVibrating()) {
+    delay(1);
+    return;
+  }
+  gpio_wakeup_enable((gpio_num_t)PIN_EPD_BUSY, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+  esp_sleep_enable_timer_wakeup(1000000ULL);
+  esp_light_sleep_start();
+}
+
 // Deferred so a wake that finds nothing changed never clocks SPI or pulses
 // the panel's reset line. initial=false skips the startup full clear, which
 // would otherwise flash on every wake.
@@ -31,7 +48,7 @@ void ensureInitialised() {
     return;
   }
   display.init(0, false, 2, false);
-  display.setRotation(0);
+  display.epd2.setBusyCallback(busyLightSleep);
   display.setTextColor(GxEPD_BLACK);
   g_initialised = true;
 }

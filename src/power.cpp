@@ -88,12 +88,20 @@ ChargerEdge powerCheckCharger() {
   return CHARGER_NO_CHANGE;
 }
 
+namespace {
+bool g_vibrating = false;
+}
+
 void powerVibrateOn() {
   pinMode(PIN_VIBRATE, OUTPUT);
   digitalWrite(PIN_VIBRATE, HIGH);
+  g_vibrating = true;
 }
 
 void powerVibrateOff() {
   pinMode(PIN_VIBRATE, OUTPUT);
   digitalWrite(PIN_VIBRATE, LOW);
+  g_vibrating = false;
 }
+
+bool powerVibrating() { return g_vibrating; }

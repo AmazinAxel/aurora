@@ -45,4 +45,4 @@ const GFXfont BarlowSemiCondensed_Regular14pt7b PROGMEM = {
   (GFXglyph *)BarlowSemiCondensed_Regular14pt7bGlyphs,
   0x30, 0x39, 33 };
 
-// Approx. 402 bytes
+// 402 bytes, subset to "0123456789"

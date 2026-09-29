@@ -51,31 +51,45 @@ uint32_t readNow() {
   return timeNowUtc();
 }
 
+// Already on the cover means the panel already shows it: redrawing would be
+// a full refresh for an identical image.
 void enterCover() {
+  if (g_state.screen == SCREEN_COVER) {
+    return;
+  }
   g_state.screen = SCREEN_COVER;
   displayCover();
+}
+
+void deepSleep(uint64_t sleep_ms, bool buttons_wake) {
+  displayHibernate();
+  powerVibrateOff();
+  rtcEnd();
+
+  // The panel's BUSY wait may have armed a light-sleep GPIO wake; it has no
+  // business in deep sleep.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+  esp_sleep_enable_timer_wakeup(sleep_ms * 1000ULL);
+
+  if (buttons_wake) {
+    esp_sleep_enable_ext1_wakeup(BUTTON_WAKE_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+
+    // Digital pulls are switched off in deep sleep, so the pins would float
+    // and could spuriously trigger the ANY_HIGH wake. GPIO 35 is input-only
+    // with no internal pulldown and relies on the board's external one.
+    rtc_gpio_pulldown_en((gpio_num_t)PIN_BTN_TOP_LEFT);
+    rtc_gpio_pulldown_en((gpio_num_t)PIN_BTN_BOTTOM_LEFT);
+    rtc_gpio_pulldown_en((gpio_num_t)PIN_BTN_BOTTOM_RIGHT);
+  }
+
+  esp_deep_sleep_start();
 }
 
 void sleepNow(uint32_t delay_sec) {
   uint32_t awake_ms = millis() - g_now_read_ms;
   uint64_t target_ms = (uint64_t)delay_sec * 1000ULL + kWakeSlackMs;
-  uint64_t sleep_ms = target_ms > awake_ms + 1000ULL ? target_ms - awake_ms
-                                                      : 1000ULL;
-  esp_sleep_enable_timer_wakeup(sleep_ms * 1000ULL);
-  esp_sleep_enable_ext1_wakeup(BUTTON_WAKE_MASK, ESP_EXT1_WAKEUP_ANY_HIGH);
-
-  // Digital pulls are switched off in deep sleep, so the pins would float and
-  // could spuriously trigger the ANY_HIGH wake. GPIO 35 is input-only with no
-  // internal pulldown and relies on the board's external one.
-  rtc_gpio_pulldown_en((gpio_num_t)PIN_BTN_TOP_LEFT);
-  rtc_gpio_pulldown_en((gpio_num_t)PIN_BTN_BOTTOM_LEFT);
-  rtc_gpio_pulldown_en((gpio_num_t)PIN_BTN_BOTTOM_RIGHT);
-
-  displayHibernate();
-  powerVibrateOff();
-  rtcEnd();
-
-  esp_deep_sleep_start();
+  deepSleep(target_ms > awake_ms + 1000ULL ? target_ms - awake_ms : 1000ULL,
+            true);
 }
 
 // True if the watch is parked on a flat cell, in which case it has already
@@ -101,17 +115,16 @@ bool handleBatteryShutdown(uint32_t now_utc) {
   // Buttons are deliberately not a wake source here: with the cell this low,
   // letting the user repeatedly wake a watch that can do nothing useful would
   // finish it off. Only the timer, to notice a charger.
-  displayHibernate();
-  powerVibrateOff();
-  rtcEnd();
-  esp_sleep_enable_timer_wakeup((uint64_t)kBatteryShutdownCheckMin * 60ULL *
-                                1000000ULL);
-  esp_deep_sleep_start();
+  deepSleep((uint64_t)kBatteryShutdownCheckMin * 60ULL * 1000ULL, false);
   return true;
 }
 
 void handleButton(Button button, uint32_t now_utc) {
-  bool held = buttonsWaitForHold(button);
+  // A spurious EXT1 wake with no pin latched must not count as a press --
+  // least of all as the one that acknowledges an alert.
+  if (button == BTN_NONE) {
+    return;
+  }
 
   // On the cover the watch is "off": top left is the power button and the
   // only thing that brings it back, so the rest are swallowed rather than
@@ -129,6 +142,10 @@ void handleButton(Button button, uint32_t now_utc) {
     pomodoroAcknowledge(now_utc);
     return;
   }
+
+  // Top right has no hold action, so it acts on the press rather than waiting
+  // out the hold window before the panel starts refreshing.
+  bool held = button != BTN_TOP_RIGHT && buttonsWaitForHold(button);
 
   switch (button) {
     case BTN_TOP_LEFT:
@@ -229,10 +246,7 @@ uint32_t nextWakeDelay(uint32_t now_utc) {
 }  // namespace
 
 void setup() {
-  // Most of a wake is spent waiting on the panel's BUSY line, so running that
-  // at 240 MHz burns current for nothing.
-  powerSetLowClock();
-
+  // Already at 80 MHz: board_build.f_cpu has the core set it before setup().
   bool cold_boot = stateInitIfCold();
 
   buttonsBegin();

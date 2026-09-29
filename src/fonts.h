@@ -20,13 +20,13 @@
 // so the only legibility left to gain is stroke mass. Within a family weight
 // grows mostly inward, so the widest digit pair is 155 px against a 166 px
 // band -- heavier strokes at the same height. Carries '-' for the invalid-time
-// face; '.' and '/' come along only because fontconvert takes a contiguous
-// range.
+// face.
 #define FONT_TIME (&BarlowSemiCondensed_Black70pt7b)
 
 // Weekday, rotated in the left strip. Rotated, a glyph's cap height becomes
 // its width and its advance becomes its length: 11pt is 15 px wide, and its
-// longest word ("WED") runs 40 px down the strip. Uppercase only.
+// longest word ("WED") runs 40 px down the strip. Only the letters of the
+// seven day names.
 #define FONT_WEEKDAY (&BarlowSemiCondensed_SemiBold11pt7b)
 
 // Month, day and battery digits, stacked in the strip. Their ink is as wide
