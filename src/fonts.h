@@ -12,7 +12,6 @@
 
 #include "assets/Strip.h"
 #include "assets/TimeBig.h"
-#include "assets/Weekday.h"
 
 // The clock, always two rows. 80x99 px digits.
 //
@@ -23,17 +22,10 @@
 // face.
 #define FONT_TIME (&BarlowSemiCondensed_Black70pt7b)
 
-// Weekday, rotated in the left strip. Rotated, a glyph's cap height becomes
-// its width and its advance becomes its length: 11pt is 15 px wide, and its
-// longest word ("WED") runs 40 px down the strip. Only the letters of the
-// seven day names.
-#define FONT_WEEKDAY (&BarlowSemiCondensed_SemiBold11pt7b)
-
-// Month, day and battery digits, stacked in the strip. Their ink is as wide
-// as the rotated weekday (15 px), which unscaled would need 27 px tall digits
-// -- more than the strip's vertical budget. So the glyphs are stretched 1.4x
-// horizontally at generation time instead, 19 px tall. Regular, not
-// SemiBold: stretching widens vertical stems too, and double-struck like the
-// weekday, Regular lands on the same 3 px strokes. Shorter and wider still
-// was tried and hurt legibility. Digits only.
-#define FONT_STRIP (&BarlowSemiCondensed_Regular14pt7b)
+// Everything in the left strip: month, day, two-letter weekday and battery,
+// stacked one glyph per row, all the same size. SemiBold 13pt stretched 1.1x
+// horizontally at generation time: 18 px tall (19 double-struck), 3 px
+// strokes both ways once double-struck, digits 12 px wide and "W", the
+// widest, 20 px -- inside the 23 px strip. Digits plus the letters of SU..SA
+// only.
+#define FONT_STRIP (&BarlowSemiCondensed_SemiBold13pt7b)

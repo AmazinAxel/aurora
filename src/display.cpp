@@ -19,8 +19,7 @@ namespace {
 GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> display(
     GxEPD2_154_D67(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY));
 
-const char *const kWeekdays[7] = {"SUN", "MON", "TUE", "WED",
-                                  "THU", "FRI", "SAT"};
+const char *const kWeekdays[7] = {"SU", "MO", "TU", "WE", "TH", "FR", "SA"};
 
 bool g_initialised = false;
 
@@ -149,8 +148,7 @@ uint32_t hashContent(const WatchfaceContent &c) {
 
 // Layout, from the real glyph metrics rather than by eye:
 //   70pt clock digits: 99 px tall, widest pair ("44") 155 px
-//   14pt strip digits: 20 px tall double-struck, 15 px wide (stretched 1.4x)
-//   11pt weekday:      15 px wide rotated, "WED" 40 px long
+//   13pt strip glyphs: 19 px tall double-struck, digits 12 px wide, "W" 20
 //
 // Three columns: the strip on the left, the clock, and the pomodoro bar on
 // the right edge. With no pomodoro the bar's room is free, so the clock band
@@ -167,46 +165,40 @@ constexpr int16_t kIdleClockRight = GxEPD2_154_D67::WIDTH - 1;
 constexpr int16_t kHourBaseline = 97;
 constexpr int16_t kMinuteBaseline = 197;
 
-// The strip runs month, day, weekday, then the battery/icon slot, with the
-// same 8 px of clear space between each pair of neighbours' ink down to the
-// weekday:
-//   4 + 43 + 8 + 43 + 8 + 38, then the slot
-// A digit is 20 px of ink (18 above the baseline, 1 below with the double
-// strike), and a two-digit block is 20 + 3 + 20. The weekday is sized for
-// its longest word, "WED" at 38 px; shorter days centre in the same slot, so
-// their gaps grow equally on both sides.
-constexpr int16_t kDigitPitch = 23;
-constexpr int16_t kMonthBaseline = 22;    // ink 4..46
-constexpr int16_t kDayBaseline = 73;      // ink 55..97
-constexpr int16_t kWeekdayCentre = 125;   // ink 106..143
+// The strip runs month, day, weekday, then the battery/icon slot, every
+// block two glyphs on one pitch: 19 px of ink (17 above the baseline, 1
+// below with the double strike) and 2 px between rows, so a block is 40 px.
+// Month and day pair as the date; the weekday and battery stand further off:
+//   8 + 40 + 6 + 40 + 9 + 40 + 4 + rule + 4 + 40 + 8
+constexpr int16_t kStripPitch = 21;
+constexpr int16_t kMonthBaseline = 25;    // ink 8..47
+constexpr int16_t kDayBaseline = 71;      // ink 54..93
+constexpr int16_t kWeekdayBaseline = 120; // ink 103..142
 
-// The battery/icon slot is whatever the weekday leaves below it (144..199),
-// and both occupants centre in it rather than hanging from its top: the
-// battery's 43 px block lands at 151..193, the 17 px icon at 164..180.
-constexpr int16_t kSlotCentre = 172;
-constexpr int16_t kSlotBaseline = 169;    // ink 151..193
-
-// Centred in the weekday-to-slot gap.
+// The battery reads as one more block, the rule centred in the gap above
+// it. The icon is not a glyph, so it centres in everything below the
+// weekday (143..199) instead: 162..180.
 constexpr int16_t kBatteryRule = 147;
+constexpr int16_t kBatteryBaseline = 169; // ink 152..191
+constexpr int16_t kIconCentre = 171;
 
-// Stacked digits, one per row. Centred on each glyph's advance rather than
-// its ink box: a '1' is narrow with its stem hard right, so centring the box
-// pushes the stem -- what the eye tracks down a column -- off axis.
+// Stacked glyphs, one per row, each centred on its own ink box so every row
+// shares the strip's axis exactly, whatever the glyph's side bearings.
 //
-// Drawn twice, one pixel apart vertically, exactly as the weekday is: the
-// Regular cut's 3 px stems and 2 px bars become 3 and 3, which is what the
-// double-struck SemiBold weekday measures.
-void drawDigitColumn(const char *text, int16_t baseline) {
+// Drawn twice, one pixel apart vertically: SemiBold's 3 px stems stay 3 and
+// its 2 px bars become 3, so strokes match both ways.
+void drawStripColumn(const char *text, int16_t baseline) {
   const GFXfont *font = FONT_STRIP;
   display.setFont(font);
   for (const char *p = text; *p; p++) {
     const GFXglyph &glyph = font->glyph[(uint8_t)*p - font->first];
-    int16_t x = (int16_t)(kStripCentre - glyph.xAdvance / 2);
+    int16_t x =
+        (int16_t)(kStripCentre - (glyph.width - 1) / 2 - glyph.xOffset);
     display.setCursor(x, baseline);
     display.write(*p);
     display.setCursor(x, (int16_t)(baseline + 1));
     display.write(*p);
-    baseline = (int16_t)(baseline + kDigitPitch);
+    baseline = (int16_t)(baseline + kStripPitch);
   }
 }
 
@@ -222,44 +214,17 @@ void drawClockRow(const char *text, int16_t baseline, int16_t left,
   display.print(text);
 }
 
-// `left` is the leftmost column the text may occupy, not the baseline: under
-// rotation the glyphs extend left of the baseline by their ascent, so passing
-// a small x directly would push most of the text off the panel.
-void drawRotated(const char *text, int16_t left, int16_t centre_y,
-                 const GFXfont *font) {
-  display.setFont(font);
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-
-  display.setRotation(3);
-  int16_t x = (int16_t)(display.height() - centre_y - w / 2 - x1);
-  int16_t y = (int16_t)(left - y1);
-
-  // Drawn twice, one pixel apart, to thicken the stems; a 1-bit panel has no
-  // lighter way to add weight. Offset on y, not x: under rotation 3 the x
-  // axis runs along the text's baseline, so shifting it would smear the
-  // glyphs lengthwise instead of thickening their stems.
-  display.setCursor(x, y);
-  display.print(text);
-  display.setCursor(x, (int16_t)(y + 1));
-  display.print(text);
-
-  display.setRotation(0);
-}
-
 // Primitives rather than glyphs: an icon font for two shapes is not worth
-// it. Sized to the strip digits' 15 px ink width.
+// it. 15 x 19 px, the strip glyphs' height.
 void drawIcon(uint8_t icon) {
   constexpr int16_t kLeft = kStripCentre - 7;
   constexpr int16_t kSize = 15;
-  constexpr int16_t kTop = kSlotCentre - 8;
-  constexpr int16_t kHeight = 17;
+  constexpr int16_t kTop = kIconCentre - 9;
+  constexpr int16_t kHeight = 19;
 
   if (icon == ICON_PLAY) {
     display.fillTriangle(kLeft, kTop, kLeft, kTop + kHeight - 1,
-                         kLeft + kSize - 1, kSlotCentre, GxEPD_BLACK);
+                         kLeft + kSize - 1, kIconCentre, GxEPD_BLACK);
   } else {
     constexpr int16_t kBar = 5;
     display.fillRect(kLeft, kTop, kBar, kHeight, GxEPD_BLACK);
@@ -268,17 +233,19 @@ void drawIcon(uint8_t icon) {
 }
 
 void drawWatchfaceContent(const WatchfaceContent &c) {
-  drawDigitColumn(c.month, kMonthBaseline);
-  drawDigitColumn(c.day, kDayBaseline);
+  drawStripColumn(c.month, kMonthBaseline);
+  drawStripColumn(c.day, kDayBaseline);
+  drawStripColumn(kWeekdays[c.weekday], kWeekdayBaseline);
 
   if (c.icon != ICON_NONE) {
     drawIcon(c.icon);
   } else if (c.battery[0] != '\0') {
     // The rule is what marks these digits as the battery rather than a date.
-    constexpr int16_t kRuleWidth = 16;
+    // Odd width, so it centres on the strip axis exactly.
+    constexpr int16_t kRuleWidth = 15;
     display.drawFastHLine((int16_t)(kStripCentre - kRuleWidth / 2),
                           kBatteryRule, kRuleWidth, GxEPD_BLACK);
-    drawDigitColumn(c.battery, kSlotBaseline);
+    drawStripColumn(c.battery, kBatteryBaseline);
   }
 
   bool idle = c.icon == ICON_NONE;
@@ -292,13 +259,6 @@ void drawWatchfaceContent(const WatchfaceContent &c) {
     display.fillRect(kBarLeft, (int16_t)(display.height() - c.bar), kBarWidth,
                      c.bar, GxEPD_BLACK);
   }
-
-  // Drawn last: it flips the global rotation, and doing that mid-sequence
-  // makes the following draws depend on it being restored. Left edge, not
-  // baseline: half the 15 px cap height left of centre, rounded out for the
-  // one-pixel double strike.
-  drawRotated(kWeekdays[c.weekday], (int16_t)(kStripCentre - 8),
-              kWeekdayCentre, FONT_WEEKDAY);
 }
 
 }  // namespace
