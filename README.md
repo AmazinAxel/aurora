@@ -58,10 +58,10 @@ struct PomodoroPreset {
 
 // Shown as two digits each, so at most 99 minutes.
 static const PomodoroPreset POMODORO_PRESETS[] = {
-    {25, 5},
-    {30, 5},
-    {50, 10},
-    {90, 20},
+  {25, 5},
+  {30, 5},
+  {50, 10},
+  {90, 20},
 };
 
 #define POMODORO_PRESET_COUNT \

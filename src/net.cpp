@@ -36,8 +36,11 @@ bool netSyncNtp(uint32_t &out_utc) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  while (WiFi.status() != WL_CONNECTED) {
-    if ((int32_t)(millis() - deadline) >= 0) {
+  for (wl_status_t st; (st = WiFi.status()) != WL_CONNECTED;) {
+    // The network is out of range or rejected the password: waiting out the
+    // timeout would only burn the radio at full clock. The next unplug retries.
+    if (st == WL_NO_SSID_AVAIL || st == WL_CONNECT_FAILED ||
+        (int32_t)(millis() - deadline) >= 0) {
       radioOff();
       return false;
     }
