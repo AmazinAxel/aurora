@@ -136,7 +136,8 @@ Typography:
 ## Build
 - `pio run -t upload`. `tools/remove_firmware_bin.py` deletes `firmware.bin` (plaintext WiFi password) after upload or build.
 - Cover: `bun tools/gen_assets.mjs src/aurora.png src/assets/cover.h` (200x200), by hand; `cover.h` committed.
-- ~803 KB flash (25%), ~51 KB RAM; WiFi/lwIP for NTP dominates.
+- `partitions.csv`: `nvs`, factory `app`, `coredump`; no OTA/filesystem. `coredump` stays: without it prebuilt IDF prints an error over UART every wake. PlatformIO still writes `boot_app0.bin` to unused 0xe000.
+- ~803 KB flash (20%), ~51 KB RAM; WiFi/lwIP for NTP dominates.
 - Already measured, don't revisit: only `-DCORE_DEBUG_LEVEL=0` pays (~18 KB); `-Os`, section GC, `-fno-rtti`, `-fno-exceptions` nothing. Hand-rolled int formatting vs `snprintf` saves no flash (`_vfprintf_r` pulled by IDF); kept for runtime. IPv6 off (~6 KB) needs custom sdkconfig; not worth it.
 
 ## Untested
