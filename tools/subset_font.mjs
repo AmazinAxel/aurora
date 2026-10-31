@@ -1,6 +1,6 @@
 // Strips the glyphs a font never draws from a fontconvert header, in place.
 //
-// Usage: node tools/subset_font.mjs <header.h> <chars>
+// Usage: bun tools/subset_font.mjs <header.h> <chars>
 //
 // fontconvert only takes a contiguous range, so a face that needs "-0123456789"
 // or the weekday letters drags in everything between. Unused glyphs at either

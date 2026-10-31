@@ -1,7 +1,6 @@
 #include "display.h"
 
 #include <GxEPD2_BW.h>
-#include <esp_sleep.h>
 
 #include "../AuroraSettings.h"
 #include "assets/cover.h"
@@ -16,40 +15,38 @@ namespace {
 
 // Page height is the full panel so the frame is composed in one buffer: 5000
 // bytes is affordable and it avoids the controller round-trips paging costs.
-GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> display(
-    GxEPD2_154_D67(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY));
+//
+// The GDEY driver rather than D67 for its fast full update: same controller
+// setup and partial waveform, but full refreshes run the shorter LUT.
+using Panel = GxEPD2_154_GDEY0154D67;
+
+GxEPD2_BW<Panel, Panel::HEIGHT> display(
+    Panel(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY));
 
 const char *const kWeekdays[7] = {"SU", "MO", "TU", "WE", "TH", "FR", "SA"};
-
-bool g_initialised = false;
 
 // A refresh is hundreds of milliseconds of the CPU polling BUSY. Light sleep
 // until the line drops instead, as the official Watchy firmware does. The
 // timer is a backstop so a panel that never releases BUSY still reaches
-// GxEPD2's timeout. Skipped while the motor runs: its pin is not guaranteed
-// to hold through light sleep, and the pulse overlaps the refresh.
+// GxEPD2's timeout. While the motor runs, which the pulse overlapping the
+// refresh means it often does, the CPU idles on the BUSY edge instead.
 void busyLightSleep(const void *) {
   if (powerVibrating()) {
-    delay(1);
+    powerIdleUntilLow(PIN_EPD_BUSY, 1000);
     return;
   }
-  gpio_wakeup_enable((gpio_num_t)PIN_EPD_BUSY, GPIO_INTR_LOW_LEVEL);
-  esp_sleep_enable_gpio_wakeup();
-  esp_sleep_enable_timer_wakeup(1000000ULL);
-  esp_light_sleep_start();
+  powerLightSleepUntilLow(PIN_EPD_BUSY, 1000);
 }
 
 // Deferred so a wake that finds nothing changed never clocks SPI or pulses
 // the panel's reset line. initial=false skips the startup full clear, which
-// would otherwise flash on every wake.
-void ensureInitialised() {
-  if (g_initialised) {
-    return;
-  }
-  display.init(0, false, 2, false);
+// would otherwise flash on every wake. 20 MHz is the controller's rated write
+// clock, as the official Watchy firmware uses, against GxEPD2's default 4.
+void initPanel() {
+  display.init(0, false, 2, false, SPI,
+               SPISettings(20000000, MSBFIRST, SPI_MODE0));
   display.epd2.setBusyCallback(busyLightSleep);
   display.setTextColor(GxEPD_BLACK);
-  g_initialised = true;
 }
 
 // Every draw goes through here, so the ghosting counter cannot drift out of
@@ -68,7 +65,7 @@ enum Icon : uint8_t {
   ICON_PAUSE,
 };
 
-// Bytes only, no padding, so the whole struct hashes as-is.
+// Bytes only, no padding, so whole structs compare and persist as-is.
 struct WatchfaceContent {
   char month[3];
   char day[3];
@@ -79,6 +76,7 @@ struct WatchfaceContent {
   uint8_t icon;
   uint8_t bar;      // pomodoro bar height in px, 0 when none
 };
+static_assert(sizeof(WatchfaceContent) == DRAWN_CONTENT_BYTES, "state.h");
 
 // Hand-rolled rather than snprintf: every value here is a small unsigned
 // integer. Always two digits, so a 5 minute break reads "05".
@@ -95,7 +93,7 @@ void buildWatchfaceContent(uint32_t now_utc, WatchfaceContent &c) {
   timeDisplayParts(now_utc, t);
   put2(c.month, t.month);
   put2(c.day, t.day);
-  c.weekday = t.weekday % 7;
+  c.weekday = t.weekday;
 
   // A recent preset change takes over the clock rows: focus on top, break
   // below, in the same digits the time uses.
@@ -125,7 +123,7 @@ void buildWatchfaceContent(uint32_t now_utc, WatchfaceContent &c) {
     if (total > 0) {
       // Rounded up, so a phase starts full and still shows a sliver in its
       // last seconds.
-      c.bar = (uint8_t)((left * GxEPD2_154_D67::HEIGHT + total - 1) / total);
+      c.bar = (uint8_t)((left * Panel::HEIGHT + total - 1) / total);
     }
   } else {
     uint8_t battery = powerBatteryPercent(now_utc);
@@ -133,17 +131,6 @@ void buildWatchfaceContent(uint32_t now_utc, WatchfaceContent &c) {
       put2(c.battery, battery);
     }
   }
-}
-
-// FNV-1a. A collision would cost one skipped update that the next minute
-// corrects, so the cheap hash is the right trade.
-uint32_t hashContent(const WatchfaceContent &c) {
-  uint32_t h = 2166136261u;
-  const uint8_t *p = (const uint8_t *)&c;
-  for (size_t i = 0; i < sizeof(c); i++) {
-    h = (h ^ p[i]) * 16777619u;
-  }
-  return h;
 }
 
 // Layout, from the real glyph metrics rather than by eye:
@@ -156,14 +143,19 @@ uint32_t hashContent(const WatchfaceContent &c) {
 // starts or stops.
 constexpr int16_t kStripCentre = 12;
 constexpr int16_t kBarWidth = 8;
-constexpr int16_t kBarLeft = GxEPD2_154_D67::WIDTH - kBarWidth;
+constexpr int16_t kBarLeft = Panel::WIDTH - kBarWidth;
 constexpr int16_t kClockLeft = 23;
 constexpr int16_t kClockRight = kBarLeft - 3;
 constexpr int16_t kIdleClockLeft = 29;
-constexpr int16_t kIdleClockRight = GxEPD2_154_D67::WIDTH - 1;
+constexpr int16_t kIdleClockRight = Panel::WIDTH - 1;
 
 constexpr int16_t kHourBaseline = 97;
 constexpr int16_t kMinuteBaseline = 197;
+
+// Between the rows' ink, 0..98 and 100..198, and between the strip's ink, which
+// ends by x 22, and the clock's, which starts at x 28 at its widest.
+constexpr int16_t kClockRowSplit = 100;
+constexpr int16_t kStripWidth = 24;
 
 // The strip runs month, day, weekday, then the battery/icon slot, every
 // block two glyphs on one pitch: 19 px of ink (17 above the baseline, 1
@@ -232,27 +224,41 @@ void drawIcon(uint8_t icon) {
   }
 }
 
-void drawWatchfaceContent(const WatchfaceContent &c) {
-  drawStripColumn(c.month, kMonthBaseline);
-  drawStripColumn(c.day, kDayBaseline);
-  drawStripColumn(kWeekdays[c.weekday], kWeekdayBaseline);
+// What the frame's write covers. Anything wholly outside it never reaches the
+// panel, so it is not drawn: most ticks change only the minute row.
+struct DrawWindow {
+  int16_t left;
+  int16_t top;
+  int16_t bottom;
+};
 
-  if (c.icon != ICON_NONE) {
-    drawIcon(c.icon);
-  } else if (c.battery[0] != '\0') {
-    // The rule is what marks these digits as the battery rather than a date.
-    // Odd width, so it centres on the strip axis exactly.
-    constexpr int16_t kRuleWidth = 15;
-    display.drawFastHLine((int16_t)(kStripCentre - kRuleWidth / 2),
-                          kBatteryRule, kRuleWidth, GxEPD_BLACK);
-    drawStripColumn(c.battery, kBatteryBaseline);
+void drawWatchfaceContent(const WatchfaceContent &c, const DrawWindow &window) {
+  if (window.left < kStripWidth) {
+    drawStripColumn(c.month, kMonthBaseline);
+    drawStripColumn(c.day, kDayBaseline);
+    drawStripColumn(kWeekdays[c.weekday], kWeekdayBaseline);
+
+    if (c.icon != ICON_NONE) {
+      drawIcon(c.icon);
+    } else if (c.battery[0] != '\0') {
+      // The rule is what marks these digits as the battery rather than a date.
+      // Odd width, so it centres on the strip axis exactly.
+      constexpr int16_t kRuleWidth = 15;
+      display.drawFastHLine((int16_t)(kStripCentre - kRuleWidth / 2),
+                            kBatteryRule, kRuleWidth, GxEPD_BLACK);
+      drawStripColumn(c.battery, kBatteryBaseline);
+    }
   }
 
   bool idle = c.icon == ICON_NONE;
   int16_t left = idle ? kIdleClockLeft : kClockLeft;
   int16_t right = idle ? kIdleClockRight : kClockRight;
-  drawClockRow(c.hour, kHourBaseline, left, right);
-  drawClockRow(c.minute, kMinuteBaseline, left, right);
+  if (window.top < kClockRowSplit) {
+    drawClockRow(c.hour, kHourBaseline, left, right);
+  }
+  if (window.bottom > kClockRowSplit) {
+    drawClockRow(c.minute, kMinuteBaseline, left, right);
+  }
 
   // Anchored to the bottom edge, so it drains from the top down.
   if (c.bar > 0) {
@@ -261,60 +267,109 @@ void drawWatchfaceContent(const WatchfaceContent &c) {
   }
 }
 
+// The smallest window covering what differs, so less goes over SPI and less
+// gets drawn. setPartialWindow rounds x out to a multiple of 8, so the clock's
+// edge sits on one, clear of the strip.
+DrawWindow setChangedWindow(const WatchfaceContent &was,
+                            const WatchfaceContent &now) {
+  int16_t x0 = display.width(), y0 = display.height(), x1 = 0, y1 = 0;
+  auto add = [&](int16_t x, int16_t y, int16_t w, int16_t h) {
+    x0 = min(x0, x);
+    y0 = min(y0, y);
+    x1 = max(x1, (int16_t)(x + w));
+    y1 = max(y1, (int16_t)(y + h));
+  };
+
+  int16_t clock_width = (int16_t)(display.width() - kStripWidth);
+  bool strip_changed = memcmp(was.month, now.month, sizeof(now.month)) != 0 ||
+                       memcmp(was.day, now.day, sizeof(now.day)) != 0 ||
+                       memcmp(was.battery, now.battery,
+                              sizeof(now.battery)) != 0 ||
+                       was.weekday != now.weekday || was.icon != now.icon;
+  if (strip_changed) {
+    add(0, 0, kStripWidth, display.height());
+  }
+  if (memcmp(was.hour, now.hour, sizeof(now.hour)) != 0) {
+    add(kStripWidth, 0, clock_width, kClockRowSplit);
+  }
+  if (memcmp(was.minute, now.minute, sizeof(now.minute)) != 0) {
+    add(kStripWidth, kClockRowSplit, clock_width,
+        (int16_t)(display.height() - kClockRowSplit));
+  }
+  if (was.bar != now.bar) {
+    int16_t tall = max(was.bar, now.bar);
+    add(kBarLeft, (int16_t)(display.height() - tall), kBarWidth,
+        (int16_t)(tall - min(was.bar, now.bar)));
+  }
+
+  // The clock band moves when a timer starts or stops, so both rows redraw.
+  if ((was.icon == ICON_NONE) != (now.icon == ICON_NONE)) {
+    add(0, 0, display.width(), display.height());
+  }
+
+  display.setPartialWindow(x0, y0, x1 - x0, y1 - y0);
+  return {x0, y0, y1};
+}
+
 }  // namespace
 
 void displayWatchface(uint32_t now_utc, bool force_full) {
   WatchfaceContent content;
   buildWatchfaceContent(now_utc, content);
 
+  WatchfaceContent drawn;
+  memcpy(&drawn, g_state.drawn_content, sizeof(drawn));
+
   // The cheapest refresh is the one that never happens: no current, no drive
   // cycle, and the ghosting counter does not advance either.
-  uint32_t hash = hashContent(content);
-  if (!force_full && hash == g_state.drawn_hash) {
+  if (!force_full && g_state.drawn_valid &&
+      memcmp(&content, &drawn, sizeof(content)) == 0) {
     return;
   }
 
-  ensureInitialised();
+  initPanel();
 
   // Window mode selects the waveform: a full window flashes and clears
   // ghosting, a partial window updates without flashing.
+  DrawWindow window = {0, 0, (int16_t)display.height()};
   if (consumeRefreshMode(force_full)) {
     display.setFullWindow();
+  } else if (g_state.drawn_valid) {
+    window = setChangedWindow(drawn, content);
   } else {
     display.setPartialWindow(0, 0, display.width(), display.height());
   }
 
+  // firstPage() clears the buffer to white.
   display.firstPage();
   do {
-    display.fillScreen(GxEPD_WHITE);
-    drawWatchfaceContent(content);
+    drawWatchfaceContent(content, window);
   } while (display.nextPage());
 
-  g_state.drawn_hash = hash;
+  // At once, not at deep sleep: a partial refresh leaves the panel's high
+  // voltage on, and a held button or an NTP sync can still be seconds away.
+  display.hibernate();
+
+  memcpy(g_state.drawn_content, &content, sizeof(content));
+  g_state.drawn_valid = true;
 }
 
 void displayCover() {
   // The one place a full refresh earns its cost: the cover is large solid
   // black and the watch then sits on it for hours, and dwelling on
   // un-neutralised charge is what makes ghosting hard to clear later.
-  ensureInitialised();
+  initPanel();
   consumeRefreshMode(true);
 
-  display.setFullWindow();
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    display.drawBitmap(0, 0, COVER_BITMAP, COVER_WIDTH, COVER_HEIGHT,
-                       GxEPD_BLACK);
-  } while (display.nextPage());
+  // Straight from flash, set bits black: the frame buffer would add nothing.
+  display.epd2.writeImageForFullRefresh(COVER_BITMAP, 0, 0, COVER_WIDTH,
+                                        COVER_HEIGHT, true, false, true);
+  display.epd2.refresh(false);
+  display.epd2.writeImageAgain(COVER_BITMAP, 0, 0, COVER_WIDTH, COVER_HEIGHT,
+                               true, false, true);
+  display.hibernate();
 
   // The panel no longer holds the watchface, so the next draw must not be
   // skipped as a no-op.
-  g_state.drawn_hash = 0;
-}
-
-void displayHibernate() {
-  if (g_initialised) {
-    display.hibernate();
-  }
+  g_state.drawn_valid = false;
 }

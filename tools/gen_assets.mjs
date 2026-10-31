@@ -1,6 +1,6 @@
 // Generates src/assets/cover.h from a 200x200 PNG.
 //
-// Usage: node tools/gen_assets.mjs <png> [out.h]
+// Usage: bun tools/gen_assets.mjs <png> [out.h]
 //
 // The panel is 1-bit: every pixel is either ink or paper. Pixels are packed
 // MSB-first into rows of ceil(width/8) bytes, the layout GxEPD2's drawBitmap
@@ -175,7 +175,7 @@ function luminanceAt(image, x, y) {
 
 const [source, destination = "src/assets/cover.h"] = process.argv.slice(2);
 if (!source) {
-  console.error("usage: node tools/gen_assets.mjs <png> [out.h]");
+  console.error("usage: bun tools/gen_assets.mjs <png> [out.h]");
   process.exit(1);
 }
 

@@ -1,62 +1,96 @@
 #include "buttons.h"
 
 #include <Arduino.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 
 #include "../AuroraSettings.h"
 #include "board.h"
+#include "power.h"
 
 namespace {
 
-int pinFor(Button b) {
-  switch (b) {
-    case BTN_TOP_LEFT: return PIN_BTN_TOP_LEFT;
-    case BTN_BOTTOM_LEFT: return PIN_BTN_BOTTOM_LEFT;
-    case BTN_TOP_RIGHT: return PIN_BTN_TOP_RIGHT;
-    case BTN_BOTTOM_RIGHT: return PIN_BTN_BOTTOM_RIGHT;
-    default: return -1;
+// In Button order, from BTN_TOP_LEFT.
+constexpr int kPins[] = {PIN_BTN_TOP_LEFT, PIN_BTN_BOTTOM_LEFT,
+                         PIN_BTN_TOP_RIGHT, PIN_BTN_BOTTOM_RIGHT};
+
+// GPIO 35 is input-only with no internal pulldown; it relies on the board's
+// external one. Still RTC-capable, so it takes part in EXT1 wake normally.
+bool hasInternalPulldown(int pin) { return pin != PIN_BTN_TOP_RIGHT; }
+
+int firstDownPin() {
+  for (int pin : kPins) {
+    if (digitalRead(pin) == HIGH) {
+      return pin;
+    }
   }
+  return -1;
 }
 
 }  // namespace
 
 void buttonsBegin() {
-  pinMode(PIN_BTN_TOP_LEFT, INPUT_PULLDOWN);
-  pinMode(PIN_BTN_BOTTOM_LEFT, INPUT_PULLDOWN);
-  pinMode(PIN_BTN_BOTTOM_RIGHT, INPUT_PULLDOWN);
-  // Input-only pin: INPUT_PULLDOWN would be a silent no-op, the board
-  // provides an external pulldown.
-  pinMode(PIN_BTN_TOP_RIGHT, INPUT);
+  for (int pin : kPins) {
+    pinMode(pin, hasInternalPulldown(pin) ? INPUT_PULLDOWN : INPUT);
+  }
+}
+
+bool buttonsArmWake() {
+  uint64_t mask = 0;
+  bool all_armed = true;
+  for (int pin : kPins) {
+    // ANY_HIGH on a pin already high would wake straight back up, forever.
+    if (digitalRead(pin) == HIGH) {
+      all_armed = false;
+      continue;
+    }
+    mask |= 1ULL << pin;
+    // Digital pulls are switched off in deep sleep, so the pins would float
+    // and could spuriously trigger the ANY_HIGH wake.
+    if (hasInternalPulldown(pin)) {
+      rtc_gpio_pulldown_en((gpio_num_t)pin);
+    }
+  }
+  if (mask != 0) {
+    esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+  }
+  return all_armed;
 }
 
 Button buttonsFromWakeMask(uint64_t mask) {
-  if (mask & (1ULL << PIN_BTN_TOP_LEFT)) return BTN_TOP_LEFT;
-  if (mask & (1ULL << PIN_BTN_BOTTOM_LEFT)) return BTN_BOTTOM_LEFT;
-  if (mask & (1ULL << PIN_BTN_TOP_RIGHT)) return BTN_TOP_RIGHT;
-  if (mask & (1ULL << PIN_BTN_BOTTOM_RIGHT)) return BTN_BOTTOM_RIGHT;
+  for (uint8_t i = 0; i < sizeof(kPins) / sizeof(kPins[0]); i++) {
+    if (mask & (1ULL << kPins[i])) {
+      return (Button)(BTN_TOP_LEFT + i);
+    }
+  }
   return BTN_NONE;
 }
 
-bool buttonsAnyDown() {
-  return digitalRead(PIN_BTN_TOP_LEFT) == HIGH ||
-         digitalRead(PIN_BTN_BOTTOM_LEFT) == HIGH ||
-         digitalRead(PIN_BTN_TOP_RIGHT) == HIGH ||
-         digitalRead(PIN_BTN_BOTTOM_RIGHT) == HIGH;
+void buttonsWaitForRelease(uint32_t timeout_ms) {
+  uint32_t start = millis();
+  for (int pin; (pin = firstDownPin()) >= 0;) {
+    uint32_t elapsed = millis() - start;
+    if (elapsed >= timeout_ms) {
+      return;
+    }
+    powerLightSleepUntilLow(pin, timeout_ms - elapsed);
+    // Contacts bounce on release; let them settle before re-checking, or a
+    // bounce would re-trigger the ANY_HIGH wake the moment the watch sleeps.
+    powerLightSleepMs(DEBOUNCE_MS);
+  }
 }
 
 bool buttonsWaitForHold(Button button) {
-  int pin = pinFor(button);
-  if (pin < 0) {
-    return false;
-  }
+  int pin = kPins[button - BTN_TOP_LEFT];
 
-  delay(DEBOUNCE_MS);
-
+  // No debounce: booting from the press to here already outlasts the bounce.
   uint32_t start = millis();
   while (digitalRead(pin) == HIGH) {
-    if (millis() - start >= HOLD_DURATION_MS) {
+    uint32_t elapsed = millis() - start;
+    if (elapsed >= HOLD_DURATION_MS) {
       return true;
     }
-    delay(10);
+    powerLightSleepUntilLow(pin, HOLD_DURATION_MS - elapsed);
   }
   return false;
 }

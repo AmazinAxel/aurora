@@ -27,16 +27,11 @@ int32_t displayOffsetSeconds() {
   return offset + (int32_t)MINUTES_AHEAD * 60;
 }
 
-// The chip's own uncorrected reading, which is what the drift model measures.
-uint32_t timeRawRtc() {
-  uint32_t raw = 0;
-  return rtcReadEpoch(raw) ? raw : 0;
-}
-
 }  // namespace
 
 uint32_t timeNowUtc() {
-  uint32_t raw = timeRawRtc();
+  // The chip's own uncorrected reading, which is what the drift model measures.
+  uint32_t raw = rtcReadEpoch();
   if (raw == 0) {
     return 0;
   }
@@ -53,9 +48,29 @@ void timeDisplayParts(uint32_t utc, RtcTime &out) {
 }
 
 void timeApplyNtp(uint32_t true_utc) {
+  // NTP is unauthenticated, so anyone on the network can answer it. A trusted
+  // clock only ever drifts seconds a day; a step this large is not a
+  // correction, unless the next sync asks for the same one, which is what a
+  // clock that really is wrong looks like. A never-synced or integrity-lost
+  // clock has nothing to defend.
+  constexpr int32_t kMaxStepSec = 86400;
+  constexpr int32_t kStepAgreementSec = 60;
+  uint32_t now = timeNowUtc();
+  int32_t step = (int32_t)(true_utc - now);
+  if (now != 0 && g_state.last_ntp_utc != 0 && !rtcClockIntegrityLost() &&
+      abs(step) > kMaxStepSec) {
+    bool confirmed = g_state.rejected_ntp_step != 0 &&
+                     abs(step - g_state.rejected_ntp_step) <= kStepAgreementSec;
+    g_state.rejected_ntp_step = step;
+    if (!confirmed) {
+      return;
+    }
+  }
+  g_state.rejected_ntp_step = 0;
+
   // Measured before the chip is touched: this reading is what the crystal
   // drifted to on its own, and it is the only evidence of the rate.
-  uint32_t raw_before = timeRawRtc();
+  uint32_t raw_before = rtcReadEpoch();
 
   if (raw_before != 0 && g_state.last_ntp_rtc != 0 &&
       g_state.last_ntp_utc != 0 && raw_before > g_state.last_ntp_rtc &&
@@ -84,7 +99,7 @@ void timeApplyNtp(uint32_t true_utc) {
 
   // Re-read rather than assuming the write landed exactly: it truncates to
   // whole seconds, and the baseline must match what the chip will report.
-  uint32_t raw_after = timeRawRtc();
+  uint32_t raw_after = rtcReadEpoch();
   g_state.last_ntp_rtc = raw_after != 0 ? raw_after : true_utc;
   g_state.last_ntp_utc = true_utc;
 }

@@ -4,11 +4,10 @@ A Pomodoro e-ink timer for your wrist!
 
 Featuring a very readable watchface with literally zero other UIs or menus. The entire firmware acts on a single display with only a sleep screen.
 
-Press the top right or bottom right buttons to cycle through the Pomodoro presets: while you're choosing, the clock shows the focus minutes on top and the break minutes below. Hold the bottom right button to toggle daylight savings.
+Press the top right or bottom right buttons to cycle through the Pomodoro presets. The clock will show the focus minutes on top and the break minutes on the bottom! Hold the bottom right button to toggle daylight savings.
 
-Use the bottom left button to pause/start the timer, or hold it to restart. While a timer runs, a play/pause mark sits in the side strip and a bar down the right edge drains from full to empty as the phase goes by. It will vibrate whenever its time to take a break or start working!
-
-The sleep screen can save battery and appears when charging. The watch's RTC is always saved so you never lose the time! And if you do, it shows `--` until the next NTP sync, which runs automatically when you unplug the charger.
+Use the bottom left button to pause/start the timer, or hold it to restart. It will vibrate whenever its time to take a break or start working!
+When you plug the device in, it will run an NTP sync and go to sleep.
 
 Everything is as optimized as possible for battery life and quick display refreshes with as few full refreshes as possible!
 
@@ -56,7 +55,6 @@ struct PomodoroPreset {
   uint16_t break_minutes;
 };
 
-// Shown as two digits each, so at most 99 minutes.
 static const PomodoroPreset POMODORO_PRESETS[] = {
   {25, 5},
   {30, 5},

@@ -16,15 +16,11 @@
 #define PIN_BTN_TOP_RIGHT 35
 #define PIN_BTN_BOTTOM_RIGHT 4
 
-// GPIO 35 is input-only with no internal pulldown; it relies on the board's
-// external one. Still RTC-capable, so it takes part in EXT1 wake normally.
-#define BUTTON_WAKE_MASK                                       \
-  ((1ULL << PIN_BTN_TOP_LEFT) | (1ULL << PIN_BTN_BOTTOM_LEFT) | \
-   (1ULL << PIN_BTN_TOP_RIGHT) | (1ULL << PIN_BTN_BOTTOM_RIGHT))
 
 #define PIN_I2C_SDA 21
 #define PIN_I2C_SCL 22
 #define RTC_I2C_ADDR 0x51
+#define ACCEL_I2C_ADDR 0x18
 
 #define PIN_VIBRATE 13
 #define PIN_BATTERY_ADC 34

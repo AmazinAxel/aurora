@@ -8,6 +8,7 @@ namespace {
 
 constexpr uint8_t REG_CONTROL2 = 0x01;
 constexpr uint8_t REG_SECONDS = 0x02;
+constexpr uint8_t REG_CLKOUT = 0x0D;
 
 // Seconds register bit 7: oscillator stopped, time unreliable.
 constexpr uint8_t FLAG_VL = 0x80;
@@ -81,23 +82,23 @@ void rtcBegin(bool cold_boot) {
     Wire.write(REG_CONTROL2);
     Wire.write((uint8_t)0x00);
     Wire.endTransmission();
+
+    // Nothing reads the square wave, and driving it costs current all sleep.
+    Wire.beginTransmission(RTC_I2C_ADDR);
+    Wire.write(REG_CLKOUT);
+    Wire.write((uint8_t)0x00);
+    Wire.endTransmission();
   }
 }
-
-void rtcEnd() { Wire.end(); }
 
 bool rtcClockIntegrityLost() { return g_integrity_lost; }
 
-bool rtcReadEpoch(uint32_t &epoch) {
+uint32_t rtcReadEpoch() {
   RtcTime t;
-  if (!rtcRead(t)) {
-    return false;
-  }
-  epoch = rtcToEpoch(t);
-  return true;
+  return rtcRead(t) ? rtcToEpoch(t) : 0;
 }
 
-bool rtcWriteEpoch(uint32_t epoch) {
+void rtcWriteEpoch(uint32_t epoch) {
   RtcTime t;
   rtcFromEpoch(epoch, t);
 
@@ -111,7 +112,7 @@ bool rtcWriteEpoch(uint32_t epoch) {
   Wire.write(t.weekday);
   Wire.write(binToBcd(t.month));
   Wire.write(binToBcd((uint8_t)(t.year % 100)));
-  return Wire.endTransmission() == 0;
+  Wire.endTransmission();
 }
 
 void rtcFromEpoch(uint32_t epoch, RtcTime &out) {

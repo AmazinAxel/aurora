@@ -24,13 +24,7 @@ bool running() {
 
 }  // namespace
 
-void pomodoroStop() {
-  g_state.phase = POMO_IDLE;
-  g_state.paused = false;
-  g_state.phase_end_utc = 0;
-  g_state.paused_remaining = 0;
-  g_state.alert_started_utc = 0;
-}
+void pomodoroStop() { beginPhase(POMO_IDLE, 0, 0); }
 
 void pomodoroCyclePreset(int8_t direction) {
   int count = (int)POMODORO_PRESET_COUNT;

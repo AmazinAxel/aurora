@@ -50,7 +50,7 @@ gen() {
   echo "  $out  ($size pt, \"$chars\")"
   FC_XSCALE="$xscale" nix-shell -p freetype --run \
     "'$WORK/fontconvert' '$TTF_DIR/$ttf' $size $first $last" > "$ASSETS/$out"
-  node tools/subset_font.mjs "$ASSETS/$out" "$chars"
+  nix shell nixpkgs#bun -c bun tools/subset_font.mjs "$ASSETS/$out" "$chars"
 }
 
 echo "generating..."
